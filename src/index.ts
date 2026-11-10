@@ -75,7 +75,7 @@ async function main(): Promise<void> {
   process.once("SIGINT", requestShutdown);
   let stage = "model_discovery";
   try {
-    runtime = await resolveModel({ agentDir: config.agentDir, provider: config.modelProvider, modelId: config.modelId });
+    runtime = await resolveModel({ agentDir: config.agentDir, authMode: config.authMode, provider: config.modelProvider, modelId: config.modelId });
     if (stopping) throw new Error("Shutdown requested");
     const sessions = new AgentSessionService({ ...runtime, agentDir: config.agentDir, sessionDir: config.sessionsDir, cwd: config.cwd });
     stage = "model_authentication_probe";
@@ -98,7 +98,7 @@ async function main(): Promise<void> {
     }), async (conversation, text) => {
       await sendRenderedResponse(api, { chat_id: conversation.chat_id, message_thread_id: conversation.thread_id || undefined }, text);
     }, config.maxConcurrent, config.turnTimeoutMs, 1000, id => telegram?.refreshWidgets(id));
-    telegram = new TelegramBot(config, store, streams, sessions, api, `${runtime.model.provider}/${runtime.model.id}`);
+    telegram = new TelegramBot(config, store, streams, sessions, api, `${runtime.model.provider}/${runtime.model.id} (${runtime.authMode === "codex" ? "Codex subscription" : "API key"})`);
     stage = "telegram_initialization";
     await telegram.bot.init();
     if (stopping) { await shutdown(); return; }
@@ -135,10 +135,10 @@ async function main(): Promise<void> {
         processing.add(task);
       }
     }, 50);
-    if (config.logLevel === "info") console.info(JSON.stringify({ event: "ready", provider: runtime.model.provider, model: runtime.model.id }));
+    if (config.logLevel === "info") console.info(JSON.stringify({ event: "ready", provider: runtime.model.provider, model: runtime.model.id, authMode: runtime.authMode }));
   } catch {
     console.error(JSON.stringify({ event: "startup_failed", stage,
-      action: "Check bot-owned GPT-6 catalog/authentication with bun scripts/models.ts, Telegram credentials, HTTPS webhook URL, and /data volume; see README. No model fallback is enabled." }));
+      action: "Check OMP_AUTH_MODE; for subscription run bun run login:codex in a private terminal. Check bot-owned GPT-6 catalog/authentication with bun scripts/models.ts, Telegram credentials, HTTPS webhook URL, and /data volume; see README. No model fallback is enabled." }));
     await shutdown();
     process.exitCode = 1;
   }

@@ -1,3 +1,4 @@
+import { readModelAuthMode, type ModelAuthMode } from "./agent/model-service.ts";
 import { isAbsolute, resolve } from "node:path";
 
 // keep deployment configuration explicit and reject unsafe public defaults
@@ -5,6 +6,7 @@ export interface Config {
   token: string; webhookSecret: string; webhookUrl: string; adminId?: number;
   accessMode: "owner" | "public"; guestAccess: "disabled" | "owner" | "public";
   agentDir: string; sessionsDir: string; databasePath: string; cwd: string;
+  authMode: ModelAuthMode;
   modelProvider?: string; modelId?: string; port: number; logLevel: "error" | "info";
   maxConcurrent: number; maxPromptChars: number; turnTimeoutMs: number;
 }
@@ -41,9 +43,13 @@ export function readConfig(env: Record<string, string | undefined> = process.env
   const port = Number(env.PORT ?? 3000);
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error("Invalid PORT");
   if (!!env.OMP_MODEL_PROVIDER !== !!env.OMP_MODEL_ID) throw new Error("Configure both OMP_MODEL_PROVIDER and OMP_MODEL_ID, or neither for GPT-6 discovery");
+  const authMode = readModelAuthMode(env.OMP_AUTH_MODE);
+  if (authMode === "codex" && env.OMP_MODEL_PROVIDER && env.OMP_MODEL_PROVIDER !== "openai-codex") {
+    throw new Error("Codex subscription mode requires openai-codex; set OMP_AUTH_MODE=api explicitly for an API provider");
+  }
   const logLevel = env.LOG_LEVEL ?? "info";
   if (logLevel !== "error" && logLevel !== "info") throw new Error("LOG_LEVEL must be error or info");
-  return { token, webhookSecret, webhookUrl, adminId, accessMode, guestAccess: guestAccess as Config["guestAccess"],
+  return { authMode, token, webhookSecret, webhookUrl, adminId, accessMode, guestAccess: guestAccess as Config["guestAccess"],
     agentDir, sessionsDir, databasePath, cwd: "/app/agent-workdir", modelProvider: env.OMP_MODEL_PROVIDER,
     modelId: env.OMP_MODEL_ID, port, logLevel, maxConcurrent: 2, maxPromptChars: 12000, turnTimeoutMs: 120000 };
 }
