@@ -9,7 +9,8 @@
   "scripts": {
     "start": "bun src/index.ts",
     "test": "bun test",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "login:codex": "bun scripts/login-codex.ts"
   },
   "dependencies": {
     "@oh-my-pi/pi-coding-agent": "18.18.6",

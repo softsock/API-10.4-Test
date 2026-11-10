@@ -9,7 +9,7 @@ import {
   SessionManager,
 } from "@oh-my-pi/pi-coding-agent";
 import { AgentRegistry } from "@oh-my-pi/pi-coding-agent/registry/agent-registry";
-import { conversationalSettings, type ModelRuntime } from "./model-service";
+import { assertModelAuthentication, conversationalSettings, type ModelRuntime } from "./model-service";
 
 // stored references bind each transcript to one application conversation rather than a shared cache
 export interface SessionReference {
@@ -26,7 +26,7 @@ export interface ConversationSession {
 }
 
 // explicit paths keep transcripts and the working directory stable across deployments
-export interface AgentSessionConfig extends Pick<ModelRuntime, "model" | "authStorage" | "modelRegistry"> {
+export interface AgentSessionConfig extends Pick<ModelRuntime, "model" | "authStorage" | "modelRegistry" | "authMode"> {
   agentDir: string;
   sessionDir: string;
   cwd: string;
@@ -91,6 +91,7 @@ export class AgentSessionService {
     let session: AgentSession | undefined;
     try {
       const config = this.#config;
+      assertModelAuthentication(config.authStorage, config.authMode, config.model.provider);
       await mkdir(config.cwd, { recursive: true });
       const cwd = await realpath(config.cwd);
       if (ephemeral) {
@@ -145,6 +146,7 @@ export class AgentSessionService {
         disableModelFallback: true,
         // model routing must remain pinned even if the sdk acquires new fallback behavior
         assertDispatchModel: (model) => {
+          assertModelAuthentication(config.authStorage, config.authMode, model.provider);
           if (model.provider !== config.model.provider || model.id !== config.model.id) {
             throw new Error("OMP attempted to dispatch an unconfigured model; request refused.");
           }

@@ -45,3 +45,12 @@ test("an unset admin allows one-time bootstrap but denies access until an owner 
     expect(() => readConfig({ ...env, ADMIN_USER_ID })).toThrow("ADMIN_USER_ID");
   }
 });
+
+// the subscription route is the default even when an api credential happens to exist in the environment
+test("authentication mode defaults to Codex and API use requires an explicit opt-in", () => {
+  expect(readConfig(env).authMode).toBe("codex");
+  expect(readConfig({ ...env, OPENAI_API_KEY: "fixture-not-a-credential" }).authMode).toBe("codex");
+  expect(readConfig({ ...env, OMP_AUTH_MODE: "api", OMP_MODEL_PROVIDER: "openai", OMP_MODEL_ID: "gpt-6" }).authMode).toBe("api");
+  expect(() => readConfig({ ...env, OMP_AUTH_MODE: "automatic" })).toThrow("OMP_AUTH_MODE");
+  expect(() => readConfig({ ...env, OMP_MODEL_PROVIDER: "openai", OMP_MODEL_ID: "gpt-6" })).toThrow("OMP_AUTH_MODE=api");
+});

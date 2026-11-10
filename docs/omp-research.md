@@ -22,7 +22,7 @@ References inspected:
 
 ## Authentication and exact model selection
 
-`resolveModel({ agentDir, provider?, modelId? })` opens a dedicated
+`resolveModel({ agentDir, authMode?, provider?, modelId? })` opens a dedicated
 `AuthStorage` at `<agentDir>/agent.db`, creates `new ModelRegistry(...)`, and
 awaits `refresh("online-if-uncached")`. `getAvailable()` and
 `hasConcreteAuth(provider)` identify authenticated catalog entries.
@@ -38,13 +38,52 @@ unrelated model is an accepted workaround. Both client-side and server-side
 fallback are disabled. An SDK dispatch assertion independently enforces the
 selected provider/id on every model request.
 
-For OpenAI API credentials, the SDK documents `OPENAI_API_KEY`. Set it as a
-Railway secret **only if the runtime catalog actually provides the required
-GPT-6 entry for that provider**. A key does not grant access to unavailable
-models. OAuth deployments must provision OMP's own credentials separately
-inside the dedicated agent directory; the SDK CLI directory override is
-`PI_CODING_AGENT_DIR`. Do not copy credentials from Hoplite or assume its
-model routing is available to this application.
+### Subscription route and retained API alternative
+
+`OMP_AUTH_MODE` defaults to `codex`. The installed registry exposes the real
+`openai-codex` provider with `openai-codex-responses` transport. The installed
+`AuthStorage.oauth.login("openai-codex-device", controller)` alias stores its grant
+under **`openai-codex`**. The device implementation is verified in
+`@oh-my-pi/pi-ai/src/registry/oauth/openai-codex.ts` and the alias routing in
+`src/auth/oauth.ts`. It requires only device-browser authorization; no operator
+password or OAuth token is collected by this application. `bun run login:codex`
+is a separate TTY-only operator command, not a bot/HTTP endpoint.
+
+The helper creates/uses a dedicated private bot directory, rejects personal-agent
+paths, displays the pinned official device URL/short-lived code only to the local
+TTY, rejects unexpected prompts, and closes AuthStorage on success, failure or
+cancellation. It does not read `~/.codex`, ambient OMP auth, or Hoplite credentials.
+The command must not run in deployment logs or be redirected into the chat.
+
+**Important SDK behavior:** `AuthStorage.create(path)` opens the credential store
+but does not populate the in-memory credential pool. Explicitly await
+`authStorage.credentials.reload()` before checking persisted OAuth/auth sources.
+This is required for restart restoration, not optional discovery.
+
+Model resolution filters by the chosen route before selecting GPT-6. Subscription
+mode requires stored OAuth with `keys.source(provider).kind === "oauth"` and no
+mixed static credentials for Codex; runtime/config API overrides are refused.
+The same assertion runs when each session opens and before every inference
+dispatch. OAuth refresh uses OMP's verified authentication pipeline through
+`ModelRegistry.getApiKey(model)`; the method name does not imply API-key billing:
+it resolves the OAuth bearer for the Codex transport. Session fallback remains
+disabled and dispatch asserts the actual provider/model. Expired or revoked
+subscription access cannot switch the model/provider or enable API billing.
+
+`OMP_AUTH_MODE=api` deliberately retains the API-key implementation, excluding
+Codex transport and OAuth-only providers. For OpenAI API credentials the SDK uses
+`OPENAI_API_KEY`; this variable is not required for subscription login. Existing
+API deployments must set `OMP_AUTH_MODE=api` explicitly after upgrading because
+the default is now subscription-only. No unrelated dependencies were upgraded.
+
+Official [OpenAI authentication documentation](https://learn.chatgpt.com/docs/auth)
+(redirect target of `https://developers.openai.com/codex/auth`, inspected
+2026-11-10) distinguishes ChatGPT subscription access from separately billed API
+access. Headless device login may require enabling device-code authorization in
+personal security settings or workspace permissions. A valid grant still does not
+prove GPT-6 entitlement; only the real authenticated runtime catalog and inference
+can do that. The startup probe consumes subscription quota or API billing according
+to the explicit mode.
 
 The authentication example currently mentions `ModelRegistry.create()`, but
 that method is absent from the pinned implementation. This application uses
@@ -59,7 +98,7 @@ remains a required live acceptance gate.
 ## Session service contract
 
 Construct `AgentSessionService` with `model`, `authStorage`, `modelRegistry`,
-`agentDir`, `sessionDir`, and stable `cwd`. The first three values come from
+`authMode`, `agentDir`, `sessionDir`, and stable `cwd`. The first three values come from
 `resolveModel()`. Use one service instance in the single application process.
 
 `open({ id, sessionId?, sessionPath?, onReference? }, ephemeral = false)`

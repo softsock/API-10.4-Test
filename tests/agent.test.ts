@@ -9,7 +9,7 @@ import {
 } from "@oh-my-pi/pi-ai";
 import { AuthStorage, ModelRegistry, parseSessionContent, SessionManager } from "@oh-my-pi/pi-coding-agent";
 import { Storage } from "../src/storage/index.ts";
-import { conversationalSettings, selectGpt6Model, type ModelRuntime } from "../src/agent/model-service";
+import { assertModelAuthentication, conversationalSettings, resolveModel, selectGpt6Model, selectModelForAuthMode, type ModelRuntime } from "../src/agent/model-service";
 import { AgentSessionService, SessionReferenceError, type SessionHandle, type SessionReference } from "../src/agent/session-service";
 
 // provider fixtures exercise the real sdk without relying on external credentials or network requests
@@ -83,7 +83,7 @@ async function fixture(mode: "complete" | "wait" | "error" = "complete"): Promis
   });
   authStorage.keys.setRuntime("telegram-test", "fixture-key-not-a-credential");
   const model = modelRegistry.find("telegram-test", "fixture-only")!;
-  const runtime: ModelRuntime = { model, modelRegistry, authStorage, dispose: () => authStorage.close() };
+  const runtime: ModelRuntime = { authMode: "api", model, modelRegistry, authStorage, dispose: () => authStorage.close() };
   const config = { ...runtime, agentDir, sessionDir: join(directory, "sessions"), cwd };
   cleanups.push(async () => { runtime.dispose(); await rm(directory, { recursive: true, force: true }); });
   return { directory, runtime, service: new AgentSessionService(config), requests, aborted: () => aborts,
@@ -319,4 +319,58 @@ test("restores conversation metadata and completed context across an application
     expect(JSON.stringify(requests.at(-1)?.messages)).toContain("remember the silver bicycle");
     await next.dispose();
   } finally { store.close(); }
+});
+
+// subscription mode must select the real codex transport even when an api-key model is also authenticated
+test("Codex selection never falls back to an API provider or an incompatible transport", async () => {
+  const { runtime } = await fixture();
+  const codex = { ...runtime.model, provider: "openai-codex", api: "openai-codex-responses" as const, id: "fixture-codex-id" };
+  expect(selectModelForAuthMode([runtime.model, codex], "codex")).toBe(codex);
+  expect(selectModelForAuthMode([runtime.model, codex], "api")).toBe(runtime.model);
+  expect(selectModelForAuthMode([codex], "codex", "openai-codex", "fixture-codex-id")).toBe(codex);
+  expect(() => selectModelForAuthMode([runtime.model], "codex")).toThrow("No authenticated GPT-6");
+  expect(() => selectModelForAuthMode([{ ...codex, name: "GPT-6 Mini" }], "codex")).toThrow("No authenticated GPT-6");
+  expect(() => selectModelForAuthMode([{ ...codex, api: "openai-responses" }], "codex")).toThrow("No authenticated GPT-6");
+  expect(() => selectModelForAuthMode([codex], "api", "openai-codex", "fixture-codex-id")).toThrow("OMP_AUTH_MODE=codex");
+  expect(() => selectModelForAuthMode([runtime.model], "codex", "telegram-test", "fixture-only")).toThrow("explicit OMP_AUTH_MODE=api");
+});
+
+// oauth grants must remain oauth after storage reload and api overrides must not masquerade as a subscription
+test("Codex authentication requires stored OAuth and rejects static or overridden keys", async () => {
+  const { runtime, directory } = await fixture();
+  const path = join(directory, "codex-auth.db");
+  let auth = await AuthStorage.create(path);
+  try {
+    expect(() => assertModelAuthentication(auth, "codex", "openai-codex")).toThrow("login:codex");
+    await auth.credentials.set("openai-codex", { type: "api_key", key: "fixture-static-not-a-credential" });
+    expect(() => assertModelAuthentication(auth, "codex", "openai-codex")).toThrow("no API fallback");
+    await auth.credentials.set("openai-codex", { type: "oauth", access: "fixture-access", refresh: "fixture-refresh", expires: Date.now() + 3600000 });
+    expect(() => assertModelAuthentication(auth, "codex", "openai-codex")).not.toThrow();
+    auth.close(); auth = await AuthStorage.create(path);
+    await auth.credentials.reload();
+    expect(() => assertModelAuthentication(auth, "codex", "openai-codex")).not.toThrow();
+    expect(() => assertModelAuthentication(auth, "api", "openai-codex")).toThrow("subscription OAuth");
+    auth.keys.setRuntime("openai-codex", "fixture-override");
+    expect(() => assertModelAuthentication(auth, "codex", "openai-codex")).toThrow("no API fallback");
+    auth.keys.removeRuntime("openai-codex");
+    expect(() => assertModelAuthentication(auth, "codex", "telegram-test")).toThrow();
+    expect(() => assertModelAuthentication(runtime.authStorage, "api", "telegram-test")).not.toThrow();
+    await auth.credentials.set("oauth-only", { type: "oauth", access: "fixture", refresh: "fixture", expires: Date.now() + 3600000 });
+    expect(() => assertModelAuthentication(auth, "api", "oauth-only")).toThrow("API-key provider");
+  } finally { auth.close(); }
+});
+
+// a missing subscription must fail before discovery can consider any api-key credential as a substitute
+test("default model resolution gives actionable Codex login instructions without authenticating another provider", async () => {
+  const { directory } = await fixture();
+  await expect(resolveModel({ agentDir: join(directory, "unconfigured-codex") })).rejects.toThrow("login:codex");
+  await expect(resolveModel({ agentDir: join(directory, "wrong-route"), provider: "openai", modelId: "gpt-6" })).rejects.toThrow("OMP_AUTH_MODE=api");
+});
+
+// runtime credential changes must be checked again when an existing session is used for a prompt
+test("session creation refuses an authentication route that no longer matches its configured mode", async () => {
+  const { runtime, directory } = await fixture();
+  const service = new AgentSessionService({ ...runtime, authMode: "codex", agentDir: join(directory, "agent"),
+    sessionDir: join(directory, "sessions"), cwd: directory });
+  await expect(service.open({ id: "wrong-billing-route" })).rejects.toThrow("Codex subscription OAuth");
 });

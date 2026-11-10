@@ -10,7 +10,7 @@ and a passing image build do not satisfy live acceptance.
 
 Integrated verification on **2026-11-10**, Bun **1.4.4**:
 
-- `bun test`: **77 passed, 0 failed, 363 assertions across 7 files**
+- `bun test`: **105 passed, 0 failed, 469 assertions across 8 files**
 - `bun run typecheck`: passed
 - `git diff --check`: passed
 - Real OMP SDK sessions, metadata/transcript restart restoration, isolated registries,
@@ -21,6 +21,9 @@ Integrated verification on **2026-11-10**, Bun **1.4.4**:
 - One-time `/stast` ownership: atomic claims, persisted ownership after restart,
   schema-v1 upgrade, configured-owner reservation, conflicting-config rejection,
   private-only claiming and all authorized control surfaces passed with simulated transport
+- Codex authentication: default mode, route isolation, missing subscription errors,
+  OAuth persistence/refresh with simulated transport, cancellation and TTY-only
+  login safety passed; the non-TTY command exits without opening an auth flow
 - Bot-owned catalog diagnostics: no authenticated models; expected explicit GPT-6
   setup error, no substitute selected
 - Railway CLI 5.71.0: installed and invoked; status returned **Unauthorized**
@@ -58,7 +61,7 @@ than claiming a build from static Dockerfile review. CI is defined in
 
 ## Required live checks
 
-Application startup itself performs one small billable GPT-6 probe before
+Application startup itself performs one small GPT-6 probe (subscription quota or API billing by selected mode) before
 readiness, then initializes Telegram and registers/verifies the webhook. Successful
 startup must not be inferred from mocked tests or model catalog diagnostics. Run
 `bun scripts/models.ts` for bot-owned credential/model diagnostics when startup
@@ -86,6 +89,19 @@ For widget appearance, capture fresh light/dark screenshots and inspect them.
 For behavior, inspect a fresh interaction recording or perform direct checks.
 Redact or recapture any private content before attaching evidence. A screenshot
 alone does not prove cancellation or server-side authorization.
+
+## Authentication follow-up
+
+The default is now **Codex subscription**. In a private interactive terminal run
+`bun run login:codex` with the same bot-owned `OMP_AGENT_DIR`, authorize in your
+browser and then restart using that persistent store. Device codes and grants
+must never appear in screenshots, public logs or chat. Existing API installations
+must explicitly set `OMP_AUTH_MODE=api`; no automatic API fallback is allowed.
+
+Live subscription authorization, refresh with the real account, actual GPT-6
+catalog entitlement and inference remain **not executed**. Unit/integration tests
+use synthetic OAuth grants/transport and do not claim paid-plan/model access.
+A successful local login alone must not change the 11 live statuses below/above.
 
 ## Additional reliability checks
 
@@ -120,7 +136,8 @@ alone does not prove cancellation or server-side authorization.
 ## Blocker resolution
 
 Configure `TELEGRAM_BOT_TOKEN`, a fresh `TELEGRAM_WEBHOOK_SECRET`, the verified
-provider credential (for OpenAI, `OPENAI_API_KEY`) as runtime variables. Reserve
+Codex OAuth via `bun run login:codex` with `OMP_AUTH_MODE=codex`, or explicitly
+choose `OMP_AUTH_MODE=api` and configure the provider key, as runtime authentication. Reserve
 `ADMIN_USER_ID` explicitly or leave it blank and claim once with `/stast` in the
 private chat. Rotate any disclosed bot token through BotFather before testing. Supply an authenticated Railway account/token through its approved
 secret mechanism and approve the service/volume cost before provisioning. A

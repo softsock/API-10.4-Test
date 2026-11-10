@@ -13,3 +13,6 @@ coverage
 tests
 docs
 README.md
+
+agent.db
+agent.db-*

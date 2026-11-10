@@ -34,32 +34,93 @@ restrictions and [persistence](docs/persistence.md) for database invariants.
    BotFather configuration and eligible external-chat restrictions are independent
    of the application's `GUEST_ACCESS_MODE`. Leave the latter `disabled` initially;
    use `owner` for initial tests. A rejected invocation does not prove Guest Mode works.
-3. Supply separate model-provider credentials to the bot runtime. Hoplite's coding
-   agent authentication is not a deployment credential and must never be copied.
-   The OpenAI API-key provider uses `OPENAI_API_KEY`; confirm that account actually
-   has GPT-6 access. An API key alone does not prove model availability.
+3. Authorize **Codex subscription** through the dedicated bot login below. This is
+   the default route; an API key is not required. Hoplite's coding-agent login and
+   personal `~/.codex`/`~/.omp` files are not bot credentials and must not be copied.
+   The separately selected API-key alternative remains available.
 4. Supply Railway access and explicitly approve any paid service, persistent
    volume, or backup feature **before creating it**. This repository does not
    provision resources or contain a Railway token.
 
-OMP uses `AuthStorage` and `ModelRegistry` to discover authenticated models. With
-both `OMP_MODEL_PROVIDER` and `OMP_MODEL_ID` unset, GPT-6 is discovered from the
-runtime's real registry. To select explicitly, set **both** to a real GPT-6
-provider/model pair reported by that registry. Do not guess an identifier, set a
-marketing name as an ID, or substitute a different model. Unavailable or
-unauthenticated GPT-6 must fail startup with a configuration error; obtain access
-and restart rather than editing the bot to silently fall back. Check `/model`
-after deployment to see the actual selected pair.
+## Authentication: Codex subscription by default
 
-Run `bun scripts/models.ts` in the configured runtime to inspect bot-owned model
-and authentication diagnostics before starting the service. The production image
-includes this script. Never use developer/Hoplite auth files to make discovery
-appear successful. On every application start, the bot sends one small GPT-6
-readiness prompt through OMP to verify real provider authentication. **This request
-is billable**, including on restarts and failed/repeated deployments. `/ready`
-remains unavailable until that probe, Telegram bot initialization, command setup,
-and webhook registration/URL verification succeed. Catalog discovery alone does
-not establish successful model authentication.
+`OMP_AUTH_MODE=codex` is the default, including when the variable is absent. Only
+OMP's **`openai-codex`** provider using the **`openai-codex-responses`** transport
+and bot-owned stored OAuth may serve requests. Setting `OPENAI_API_KEY` does not
+enable or override this route. Missing/expired/revoked OAuth, missing GPT-6 access,
+usage-limit exhaustion, or an incompatible provider fails explicitly: there is
+**no automatic API-key billing or model substitution**.
+
+### Sign in from WSL or another private terminal
+
+Use the pinned Bun runtime and a dedicated writable bot directory. The login is
+an operator command, not a Telegram command or a startup step. Stop the bot before
+logging in, and run this as the same OS user that owns its storage:
+
+```sh
+# OMP_AGENT_DIR defaults to /data/omp/agent; ensure it is writable by this user
+bun run login:codex
+bun scripts/models.ts
+bun run start
+```
+
+The command requires an **interactive local terminal**; redirected/non-TTY output
+is rejected before any login request. It shows the official device sign-in URL
+and short-lived code only in that terminal. Open the link in your browser, sign
+in to your own ChatGPT/Codex subscription, and enter that code. Do not paste device
+codes, passwords, OAuth callback URLs, or tokens into this chat, Telegram, GitHub,
+or deployment logs. No browser session or credentials are borrowed from Hoplite.
+Cancel with Ctrl+C; retry after an expired or cancelled challenge.
+
+If device login is disabled, enable it in your **ChatGPT personal security
+settings**, or ask your workspace administrator to enable device-code login in
+workspace permissions. See [OpenAI Codex authentication](https://learn.chatgpt.com/docs/auth).
+The bot uses OMP's built-in device flow, not the separate `codex` CLI or its
+credential cache. You do not need to install that CLI.
+
+OMP stores and refreshes the OAuth grant in **`OMP_AGENT_DIR/agent.db`**. Keep the
+same private agent directory across restarts and deployments; treat it and its
+backups as secrets. A revoked grant requires this login again. Never commit or
+upload that database to GitHub. For a container/cloud runtime, authorize in a
+private interactive terminal with the persistent volume mounted as the bot user.
+If the platform cannot offer that shell, provision a separate **bot-owned** store
+locally and securely restore that agent directory with all writers stopped;
+never copy Hoplite's or an unrelated personal agent's credentials. Do not expose
+a public OAuth callback service or run login during image builds.
+
+Authentication does not guarantee access to **GPT-6**. `bun scripts/models.ts`
+prints actual authenticated catalog identities without tokens. Leave **both**
+`OMP_MODEL_PROVIDER` and `OMP_MODEL_ID` unset for GPT-6 discovery within the chosen
+mode, or set both to the exact reported provider/id. In subscription mode the
+provider must be `openai-codex`; **do not guess the model ID**. If no GPT-6 entry is
+available, obtain the required plan/workspace/model access rather than selecting
+a different model. `/model` shows the actual route and provider/model pair.
+
+### API-key alternative: explicit opt-in only
+
+The existing API implementation is retained. To choose separately billed API
+access, configure:
+
+```dotenv
+OMP_AUTH_MODE=api
+OPENAI_API_KEY=your_provider_key
+# Leave both model selectors unset, or use the exact API provider/id from diagnostics
+```
+
+`OPENAI_API_KEY` applies to the OpenAI API provider; other supported API providers
+use their documented credentials. API mode rejects Codex subscription models and
+OAuth-only credentials, and subscription mode never falls back to API mode.
+If an existing installation used API keys without an auth mode, add
+**`OMP_AUTH_MODE=api`** to retain that behavior. The new default intentionally
+fails closed rather than silently spending API credit.
+
+On every application start, one small GPT-6 readiness prompt verifies actual
+provider authentication. **It consumes subscription quota in Codex mode or is
+billable in API mode**, including on restarts and failed/repeated deployments.
+`/ready` remains unavailable until this probe, Telegram initialization, command
+setup, and webhook registration/URL verification succeed. Catalog discovery or
+successful login alone does not prove a real GPT-6 inference succeeded. Live
+subscription login/inference remains unverified until the owner authorizes it.
 
 ## One-time owner claim
 
@@ -145,7 +206,9 @@ After explicit approval for resources:
    configured service. Do not supply a URL path other than `/telegram/webhook`.
 4. Add `.env.example` variables in Railway Variables, with actual secrets supplied
    directly there: `TELEGRAM_BOT_TOKEN`, `TELEGRAM_WEBHOOK_SECRET`, and the selected
-   provider's authentication (for OpenAI, `OPENAI_API_KEY`). Reserve the owner with
+   authentication mode. Keep `OMP_AUTH_MODE=codex` and provision the bot-owned OAuth
+   store using the private login procedure above; no API key is needed. For the
+   alternative, set `OMP_AUTH_MODE=api` and the provider key. Reserve the owner with
    `ADMIN_USER_ID`, or leave it blank and immediately claim via `/stast`. Set
    `BOT_ACCESS_MODE=owner`, and `GUEST_ACCESS_MODE=disabled`. Retain the `/data`
    defaults. Leave model selectors unset for authenticated GPT-6 discovery or set
@@ -156,8 +219,8 @@ After explicit approval for resources:
    The build-time `/data` ownership does not override mounted-volume permissions.
    Do not override the Docker entrypoint. Leave the start command at the image
    default. Railway supplies `PORT`; the server listens on `0.0.0.0`.
-6. Deploy. The `/ready` healthcheck must return HTTP 200 only after the billed GPT-6
-   authentication probe and Telegram/webhook initialization;
+6. Deploy. The `/ready` healthcheck must return HTTP 200 only after the GPT-6
+   authentication probe (subscription quota or API billing according to the mode) and Telegram/webhook initialization;
    `/health` is process liveness. Missing provider access, unwritable storage, or
    missing configuration must be fixed rather than bypassing readiness. No OMP
    initialization or migration belongs in a pre-deploy command: Railway does not
@@ -213,8 +276,8 @@ unsupported capability errors are not evidence of a successful fallback feature.
 Keep owner-only access until verifying cost controls. The current configuration
 caps global concurrent generations at two, prompt length at 12,000 characters,
 and turn duration at 120 seconds. Per-user limits and per-conversation busy
-responses do not create a provider spending cap; configure provider account
-budgets separately. Never enable shell, filesystem, browser, Git, extension, or
+responses do not create a provider spending cap; review subscription quotas/workspace permissions or configure API account
+budgets separately, according to the selected mode. Never enable shell, filesystem, browser, Git, extension, or
 MCP discovery for this conversational bot just because packages are installed.
 
 ## Persistence, backup, and operations
