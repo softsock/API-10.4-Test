@@ -1,0 +1,15 @@
+.git
+.github
+.hoplite
+.tools
+node_modules
+.env
+.env.*
+!.env.example
+data
+**/*.sqlite*
+**/*.jsonl
+coverage
+tests
+docs
+README.md
