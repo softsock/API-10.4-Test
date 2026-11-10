@@ -134,7 +134,7 @@ async function main(): Promise<void> {
         processing.add(task);
       }
     }, 50);
-    console.info(JSON.stringify({ event: "ready", provider: runtime.model.provider, model: runtime.model.id }));
+    if (config.logLevel === "info") console.info(JSON.stringify({ event: "ready", provider: runtime.model.provider, model: runtime.model.id }));
   } catch {
     console.error(JSON.stringify({ event: "startup_failed", stage,
       action: "Check bot-owned GPT-6 catalog/authentication with bun scripts/models.ts, Telegram credentials, HTTPS webhook URL, and /data volume; see README. No model fallback is enabled." }));
