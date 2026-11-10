@@ -103,6 +103,7 @@ async function main(): Promise<void> {
     await telegram.bot.init();
     if (stopping) { await shutdown(); return; }
     await telegram.bot.api.setMyCommands([
+      { command: "stast", description: "Claim owner once if unassigned" },
       { command: "start", description: "Introduction and basic controls" }, { command: "help", description: "Available commands" },
       { command: "new", description: "Start a new conversation" }, { command: "stop", description: "Cancel generation" },
       { command: "status", description: "Current session status" }, { command: "model", description: "Actual provider and model" },

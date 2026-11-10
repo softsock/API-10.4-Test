@@ -1,4 +1,7 @@
 import { expect, test } from "bun:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { Update } from "grammy/types";
 import { readConfig } from "../src/config.ts";
 import { Storage } from "../src/storage/index.ts";
@@ -9,12 +12,12 @@ import type { AgentSessionService, SessionHandle } from "../src/agent/session-se
 import { sendRenderedResponse } from "../src/rendering/rich-message.ts";
 
 // exercise real grammy routing and telegram transport with only the external model and network replaced
-function fixture() {
-  const store = new Storage(":memory:");
+function fixture(adminId = "42", databasePath = ":memory:") {
+  const store = new Storage(databasePath);
   const hooks: { beforeEdit?: () => Promise<void>; beforeOpen?: () => Promise<void>; beforePrompt?: () => Promise<void>; abort?: () => void; output?: string; failWidgetAnswer?: boolean } = {};
   const calls: Array<{ method: string; body: Record<string, any> }> = [];
   const prompts: Array<{ id: string; ephemeral: boolean; text: string }> = [];
-  const config = readConfig({ TELEGRAM_BOT_TOKEN: "123:test", TELEGRAM_WEBHOOK_SECRET: "s".repeat(32), TELEGRAM_WEBHOOK_URL: "https://bot.example/telegram/webhook", ADMIN_USER_ID: "42", GUEST_ACCESS_MODE: "owner" });
+  const config = readConfig({ TELEGRAM_BOT_TOKEN: "123:test", TELEGRAM_WEBHOOK_SECRET: "s".repeat(32), TELEGRAM_WEBHOOK_URL: "https://bot.example/telegram/webhook", ADMIN_USER_ID: adminId, GUEST_ACCESS_MODE: "owner" });
   const api = new TelegramApi(config.token, { fetch: (async (url: string | URL | Request, options: RequestInit) => {
     const method = String(url).split("/").at(-1)!; const body = JSON.parse(String(options.body));
     calls.push({ method, body });
@@ -41,7 +44,7 @@ function fixture() {
     await bot.bot.handleUpdate(update); store.finishUpdate(update.update_id, "completed");
   };
   const close = async (): Promise<void> => { await bot.shutdown(); await stream.shutdown(); store.close(); };
-  return { store, calls, prompts, bot, stream, dispatch, close, hooks };
+  return { store, calls, prompts, bot, stream, dispatch, close, hooks, config, sessions, api };
 }
 
 // retain real update fields so middleware routing matches telegram's actual webhook contract
@@ -207,4 +210,93 @@ test("reused widget refreshes serialize with generation transitions and never sh
     expect(states.at(-1)!.status).toBe("completed");
     expect(f.calls.filter(call => call.method === "sendWidget")).toHaveLength(1);
   } finally { editing.resolve(); await f.close(); }
+});
+
+// the first valid private claim wins before any await and cannot be replaced by a concurrent claimant
+test("first private /stast establishes owner atomically and only the winner can generate", async () => {
+  const f = fixture("");
+  try {
+    await f.dispatch(message(1, "no owner yet", 43));
+    expect(f.prompts).toHaveLength(0);
+    await Promise.all([f.dispatch(message(2, "/stast", 42)), f.dispatch(message(3, "/stast", 43))]);
+    expect(f.store.getOwnerId()).toBe(42);
+    expect(f.calls.filter(call => call.body.text?.includes("now the bot owner"))).toHaveLength(1);
+    await f.dispatch(message(4, "allowed", 42));
+    await f.dispatch(message(5, "denied", 43));
+    expect(f.prompts).toHaveLength(1);
+    await f.dispatch(message(6, "/reset", 42));
+    expect(f.store.getOwnerId()).toBe(42);
+  } finally { await f.close(); }
+});
+
+// commands addressed to another bot, group messages and bot accounts must never gain privileged ownership
+test("/stast claims require a real user in private chat and the correct bot mention", async () => {
+  const f = fixture("");
+  try {
+    const group = message(1, "/stast"); group.message!.chat = { id: -1, type: "group", title: "Group" };
+    await f.dispatch(group);
+    const robot = message(2, "/stast"); robot.message!.from!.is_bot = true;
+    await f.dispatch(robot);
+    await f.dispatch(message(3, "/stast@other_bot"));
+    const guest = message(4, "/stast").message!; guest.guest_query_id = "no-owner-claim";
+    await f.dispatch({ update_id: 4, guest_message: guest });
+    expect(f.store.getOwnerId()).toBeUndefined();
+    await f.dispatch(message(5, "/stast@agent_bot"));
+    expect(f.store.getOwnerId()).toBe(42);
+    await f.dispatch(message(6, "/stast"));
+    expect(f.calls.at(-1)!.body.text).toContain("already the bot owner");
+  } finally { await f.close(); }
+});
+
+// an explicitly configured administrator is reserved before any stranger can attempt the bootstrap command
+test("configured admin reserves durable ownership and cannot be claimed by another user", async () => {
+  const f = fixture();
+  try {
+    expect(f.store.getOwnerId()).toBe(42);
+    await f.dispatch(message(1, "/stast", 43));
+    expect(f.store.getOwnerId()).toBe(42);
+    expect(f.calls.at(-1)!.body.text).toContain("already has an owner");
+  } finally { await f.close(); }
+});
+
+// a fresh process must honor the original claim and fail closed on conflicting environment ownership
+test("claimed ownership survives bot recreation and refuses conflicting admin configuration", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "telegram-owner-"));
+  const path = join(directory, "app.sqlite");
+  let current = fixture("", path);
+  try {
+    await current.dispatch(message(1, "/stast", 42));
+    await current.close();
+    current = fixture("", path);
+    expect(current.store.getOwnerId()).toBe(42);
+    await current.dispatch(message(2, "/stast", 43));
+    await current.dispatch(message(3, "still owner", 42));
+    await current.dispatch(message(4, "still denied", 43));
+    expect(current.prompts).toHaveLength(1);
+    expect(() => new TelegramBot({ ...current.config, adminId: 43 }, current.store, current.stream,
+      current.sessions, current.api, "fixture-provider/gpt-6")).toThrow("conflicts with the persisted bot owner");
+    expect(current.store.getOwnerId()).toBe(42);
+  } finally { await current.close(); rmSync(directory, { recursive: true, force: true }); }
+});
+
+// the persisted winner must receive the same widget callback and guest permissions as a configured owner
+test("claimed owner can use widgets ephemeral callbacks and owner-authorized guest mode", async () => {
+  const f = fixture("");
+  try {
+    await f.dispatch(message(1, "/stast", 42));
+    await f.dispatch(message(2, "/widget", 42));
+    await f.dispatch({ update_id: 3, widget_query: { id: "claimed-widget", from: { id: 42, is_bot: false, first_name: "Owner" },
+      chat: { id: 42, type: "private" }, message_id: 10, chat_instance: "test", type: { type: "data" }, data: "status" } });
+    const answer = f.calls.find(call => call.method === "answerWidgetQuery" && call.body.widget_query_id === "claimed-widget");
+    expect(JSON.parse(answer!.body.data).model).toBe("fixture-provider/gpt-6");
+    await f.dispatch({ update_id: 4, callback_query: { id: "claimed-callback", from: { id: 42, is_bot: false, first_name: "Owner" },
+      chat_instance: "test", message: message(10, "controls").message!, data: "status" } });
+    expect(f.calls.find(call => call.body.ephemeral_message_parameters?.callback_query_id === "claimed-callback")!.body.text).toContain("Model: fixture-provider/gpt-6");
+    const guest = message(5, "guest", 42).message!; guest.guest_query_id = "claimed-guest";
+    await f.dispatch({ update_id: 5, guest_message: guest });
+    expect(f.prompts).toHaveLength(1);
+    expect(f.prompts[0]!.ephemeral).toBe(true);
+    await f.dispatch(message(6, "/new", 42));
+    expect(f.store.getOwnerId()).toBe(42);
+  } finally { await f.close(); }
 });

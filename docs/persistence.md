@@ -5,6 +5,17 @@ for `/data/app.sqlite`; run `recoverInterrupted()` **once at process startup bef
 accepting work**, never while another runtime instance is active. Migrations run
 transactionally using `PRAGMA user_version`; future versions and corrupt databases
 fail closed. WAL, foreign keys, a busy timeout, and FULL synchronous commits are enabled.
+Schema v2 adds the singleton `bot_owner` table to fresh databases and upgrades
+schema v1 transactionally without changing conversation or session references.
+The first successful `claimOwner(userId)` wins through the primary-key constraint;
+`getOwnerId()` supplies authorization for private messages, callbacks, widgets and
+guest interactions. If `ADMIN_USER_ID` is set, it reserves this record before
+processing updates; a conflicting persisted owner fails startup. Owner records
+are part of the same coherent backup and survive conversation resets. There is
+no ownership-transfer command. Rolling back to schema-v1-only code fails closed
+on v2, so use v2-compatible code or restore a coherent pre-upgrade backup while
+all writers are stopped; never manually lower `PRAGMA user_version` in production.
+
 Use one Railway replica and one volume. Session files remain OMP's responsibility.
 
 ## Integration contract

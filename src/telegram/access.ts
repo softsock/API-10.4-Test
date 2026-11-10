@@ -1,9 +1,10 @@
 import type { Config } from "../config.ts";
 
-// keep private and guest authorization independent at every entry point
-export function authorized(config: Config, userId: number, guest = false): boolean {
+// deny unclaimed bots while keeping private and guest policies independent after ownership is established
+export function authorized(config: Config, userId: number, guest = false, ownerId = config.adminId): boolean {
+  if (ownerId === undefined) return false;
   const mode = guest ? config.guestAccess : config.accessMode;
-  return mode === "public" || (mode === "owner" && userId === config.adminId);
+  return mode === "public" || (mode === "owner" && userId === ownerId);
 }
 
 // bound per-user requests and cost without another service or unbounded key retention

@@ -119,6 +119,16 @@ CREATE TABLE widget_messages (
 PRAGMA user_version = 1;
 `;
 
+// persist the first private owner claim independently of conversation resets and deployments
+const ownerMigration = `
+CREATE TABLE bot_owner (
+  singleton INTEGER PRIMARY KEY CHECK(singleton = 1),
+  telegram_user_id INTEGER NOT NULL CHECK(telegram_user_id > 0 AND telegram_user_id <= 9007199254740991),
+  claimed_at INTEGER NOT NULL
+) STRICT;
+PRAGMA user_version = 2;
+`;
+
 // centralize the single-instance durable state without taking ownership of omp session files
 export class Storage {
   private readonly db: Database;
@@ -131,13 +141,27 @@ export class Storage {
       this.db.exec("PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000; PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL;");
       this.db.transaction(() => {
         const version = (this.db.query("PRAGMA user_version").get() as { user_version: number }).user_version;
-        if (version > 1) throw new Error(`Unsupported database schema version ${version}`);
+        if (version > 2) throw new Error(`Unsupported database schema version ${version}`);
         if (version === 0) this.db.exec(migration);
+        if (version < 2) this.db.exec(ownerMigration);
       }).immediate();
     } catch (error) {
       this.db.close();
       throw error;
     }
+  }
+
+  // read the durable owner rather than relying on mutable widget state or a process-local cache
+  getOwnerId(): number | undefined {
+    const owner = this.db.query("SELECT telegram_user_id FROM bot_owner WHERE singleton = 1").get() as { telegram_user_id: number } | null;
+    return owner?.telegram_user_id;
+  }
+
+  // let exactly one contender claim ownership even when separate database connections race
+  claimOwner(userId: number): boolean {
+    safeInteger(userId, 1);
+    return this.db.query(`INSERT INTO bot_owner(singleton, telegram_user_id, claimed_at)
+      VALUES (1, ?, ?) ON CONFLICT(singleton) DO NOTHING`).run(userId, Date.now()).changes === 1;
   }
 
   // atomically normalize absent topics and prevent concurrent creation of duplicate identities

@@ -2,7 +2,7 @@ import { isAbsolute, resolve } from "node:path";
 
 // keep deployment configuration explicit and reject unsafe public defaults
 export interface Config {
-  token: string; webhookSecret: string; webhookUrl: string; adminId: number;
+  token: string; webhookSecret: string; webhookUrl: string; adminId?: number;
   accessMode: "owner" | "public"; guestAccess: "disabled" | "owner" | "public";
   agentDir: string; sessionsDir: string; databasePath: string; cwd: string;
   modelProvider?: string; modelId?: string; port: number; logLevel: "error" | "info";
@@ -25,8 +25,9 @@ export function readConfig(env: Record<string, string | undefined> = process.env
   if (url.protocol !== "https:" || url.pathname !== "/telegram/webhook" || url.username || url.password || url.search || url.hash) {
     throw new Error("TELEGRAM_WEBHOOK_URL must be an HTTPS /telegram/webhook URL without credentials or query");
   }
-  const adminId = Number(required("ADMIN_USER_ID"));
-  if (!Number.isSafeInteger(adminId) || adminId <= 0) throw new Error("ADMIN_USER_ID must be a positive Telegram user ID");
+  const configuredAdmin = env.ADMIN_USER_ID?.trim();
+  const adminId = configuredAdmin ? Number(configuredAdmin) : undefined;
+  if (adminId !== undefined && (!Number.isSafeInteger(adminId) || adminId <= 0)) throw new Error("ADMIN_USER_ID must be a positive Telegram user ID when set");
   const accessMode = env.BOT_ACCESS_MODE ?? "owner";
   const guestAccess = env.GUEST_ACCESS_MODE ?? "disabled";
   if (accessMode !== "owner" && accessMode !== "public") throw new Error("BOT_ACCESS_MODE must be owner or public");

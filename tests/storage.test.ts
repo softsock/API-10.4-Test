@@ -37,12 +37,12 @@ test("fresh migration creates all entities and refuses future schema versions", 
   const store = f.open();
   store.getOrCreateConversation({ userId: 1, chatId: 1 });
   const raw = new Database(f.path);
-  expect(raw.query("PRAGMA user_version").get()).toEqual({ user_version: 1 });
-  expect(raw.query("SELECT name FROM sqlite_master WHERE type = 'table'").all()).toHaveLength(4);
+  expect(raw.query("PRAGMA user_version").get()).toEqual({ user_version: 2 });
+  expect(raw.query("SELECT name FROM sqlite_master WHERE type = 'table'").all()).toHaveLength(5);
   expect(f.open().getOrCreateConversation({ userId: 1, chatId: 1 }).telegram_user_id).toBe("1");
-  raw.exec("PRAGMA user_version = 2");
+  raw.exec("PRAGMA user_version = 3");
   raw.close();
-  expect(() => f.open()).toThrow("Unsupported database schema version 2");
+  expect(() => f.open()).toThrow("Unsupported database schema version 3");
 });
 
 // prevent history from crossing user, chat, or topic boundaries
@@ -309,4 +309,35 @@ test("deadline-sensitive controls are claimed ahead of normal message backlog", 
     store.acceptUpdate(3, { update_id: 3, message: { text: "/stop" } });
     expect(store.getPendingUpdates().map(item => item.update_id)).toEqual([2, 3, 1]);
   } finally { store.close(); }
+});
+
+// upgrading existing installations must preserve every conversation while creating the singleton owner slot
+test("schema v1 upgrades without losing conversation data and remains idempotent", () => {
+  const f = fixture();
+  const previous = f.open();
+  const conversation = previous.getOrCreateConversation({ userId: 42, chatId: 42 });
+  previous.close();
+  const raw = new Database(f.path);
+  raw.exec("DROP TABLE bot_owner; PRAGMA user_version = 1;");
+  raw.close();
+  const upgraded = f.open();
+  expect(upgraded.getOwnerId()).toBeUndefined();
+  expect(upgraded.getConversation(conversation.id)?.telegram_user_id).toBe("42");
+  expect(upgraded.claimOwner(42)).toBe(true);
+  expect(f.open().getOwnerId()).toBe(42);
+});
+
+// one database constraint must settle competing owner claims and survive an application restart
+test("owner claims are atomic across connections and persist independently of reset", () => {
+  const f = fixture();
+  const first = f.open(); const second = f.open();
+  expect(first.getOwnerId()).toBeUndefined();
+  expect(first.claimOwner(42)).toBe(true);
+  expect(second.claimOwner(43)).toBe(false);
+  expect(second.claimOwner(42)).toBe(false);
+  const conversation = first.getOrCreateConversation({ userId: 42, chatId: 42 });
+  first.resetSessionReference(conversation.id);
+  first.close(); second.close();
+  expect(f.open().getOwnerId()).toBe(42);
+  for (const invalid of [0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1]) expect(() => f.open().claimOwner(invalid)).toThrow();
 });

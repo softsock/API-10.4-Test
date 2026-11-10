@@ -10,7 +10,7 @@ and a passing image build do not satisfy live acceptance.
 
 Integrated verification on **2026-11-10**, Bun **1.4.4**:
 
-- `bun test`: **69 passed, 0 failed, 318 assertions across 7 files**
+- `bun test`: **77 passed, 0 failed, 363 assertions across 7 files**
 - `bun run typecheck`: passed
 - `git diff --check`: passed
 - Real OMP SDK sessions, metadata/transcript restart restoration, isolated registries,
@@ -18,6 +18,9 @@ Integrated verification on **2026-11-10**, Bun **1.4.4**:
 - Telegram routing, drafts, explicit 429 backoff, rich fallback, widget authorization,
   guest isolation, ephemeral callback payloads and webhook authentication: passed
   with a **simulated Telegram transport**
+- One-time `/stast` ownership: atomic claims, persisted ownership after restart,
+  schema-v1 upgrade, configured-owner reservation, conflicting-config rejection,
+  private-only claiming and all authorized control surfaces passed with simulated transport
 - Bot-owned catalog diagnostics: no authenticated models; expected explicit GPT-6
   setup error, no substitute selected
 - Railway CLI 5.71.0: installed and invoked; status returned **Unauthorized**
@@ -86,6 +89,14 @@ alone does not prove cancellation or server-side authorization.
 
 ## Additional reliability checks
 
+- With `ADMIN_USER_ID` blank and a fresh owner record, send `/stast` privately as
+  the intended owner, then try another user. Confirm only the first owns the bot,
+  normal messages before claiming cannot generate, and group/guest/bot-account
+  claims are ignored. Restart with the same volume and confirm ownership remains.
+  A configured owner must be reserved before any incoming claim; a conflicting
+  environment owner must fail startup. These live checks remain **not executed**.
+
+
 - `GET /health` and `GET /ready` return expected liveness/readiness; no token or
   transcript appears in their bodies. Requests with a missing or incorrect webhook
   secret are rejected, and a correctly authenticated update is durably accepted.
@@ -109,8 +120,9 @@ alone does not prove cancellation or server-side authorization.
 ## Blocker resolution
 
 Configure `TELEGRAM_BOT_TOKEN`, a fresh `TELEGRAM_WEBHOOK_SECRET`, the verified
-provider credential (for OpenAI, `OPENAI_API_KEY`), and `ADMIN_USER_ID` as runtime
-variables. Supply an authenticated Railway account/token through its approved
+provider credential (for OpenAI, `OPENAI_API_KEY`) as runtime variables. Reserve
+`ADMIN_USER_ID` explicitly or leave it blank and claim once with `/stast` in the
+private chat. Rotate any disclosed bot token through BotFather before testing. Supply an authenticated Railway account/token through its approved
 secret mechanism and approve the service/volume cost before provisioning. A
 Railway token is a deployment credential, not an application environment variable.
 The selected provider account must independently offer GPT-6 in the deployed

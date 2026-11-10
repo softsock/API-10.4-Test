@@ -30,3 +30,18 @@ test("rate limiter bounds bursts and releases expired budgets", () => {
   now = 60001;
   expect(limiter.allow(1)).toBe(true);
 });
+
+// unconfigured ownership must not accidentally make either private or guest generation public
+test("an unset admin allows one-time bootstrap but denies access until an owner is persisted", () => {
+  const config = readConfig({ ...env, ADMIN_USER_ID: "" });
+  expect(config.adminId).toBeUndefined();
+  expect(authorized(config, 42)).toBe(false);
+  expect(authorized({ ...config, accessMode: "public", guestAccess: "public" }, 42)).toBe(false);
+  expect(authorized({ ...config, guestAccess: "public" }, 42, true)).toBe(false);
+  expect(authorized(config, 42, false, 42)).toBe(true);
+  expect(authorized(config, 43, false, 42)).toBe(false);
+  expect(authorized({ ...config, guestAccess: "owner" }, 42, true, 42)).toBe(true);
+  for (const ADMIN_USER_ID of ["0", "-1", "invalid", "1.5", "9007199254740992"]) {
+    expect(() => readConfig({ ...env, ADMIN_USER_ID })).toThrow("ADMIN_USER_ID");
+  }
+});

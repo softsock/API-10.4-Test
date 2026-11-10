@@ -30,6 +30,10 @@ export class TelegramBot {
   constructor(private readonly config: Config, private readonly store: Storage,
     private readonly stream: StreamService, private readonly sessions: AgentSessionService,
     private readonly api: TelegramApi, private readonly modelLabel: string) {
+    if (config.adminId !== undefined) {
+      store.claimOwner(config.adminId);
+      if (store.getOwnerId() !== config.adminId) throw new Error("ADMIN_USER_ID conflicts with the persisted bot owner; refusing an ownership change");
+    }
     this.bot = new Bot(config.token);
     this.bot.use(async (ctx, next) => {
       const update = ctx.update as AppUpdate;
@@ -46,7 +50,17 @@ export class TelegramBot {
     this.bot.on("message:text", async ctx => {
       const message = ctx.message;
       if (this.closing || message.chat.type !== "private" || message.from.is_bot) return;
-      if (!authorized(config, message.from.id)) {
+      const claim = /^\/stast(?:@([A-Za-z0-9_]+))?\s*$/i.exec(message.text);
+      if (claim && (!claim[1] || claim[1].toLowerCase() === this.bot.botInfo.username.toLowerCase())) {
+        if (!this.controlLimiter.allow(message.from.id)) return;
+        const won = store.claimOwner(message.from.id);
+        await api.sendMessage({ chat_id: message.chat.id, message_thread_id: message.message_thread_id,
+          text: won ? "You are now the bot owner. Ownership is saved across restarts. Use /start for controls."
+            : store.getOwnerId() === message.from.id ? "You are already the bot owner. Use /start for controls."
+            : "This bot already has an owner. Ownership cannot be claimed again." });
+        return;
+      }
+      if (!authorized(config, message.from.id, false, store.getOwnerId())) {
         await api.sendMessage({ chat_id: message.chat.id, text: "This bot is restricted to its owner." }); return;
       }
       const conversation = store.getOrCreateConversation({ userId: message.from.id, chatId: message.chat.id, threadId: message.message_thread_id });
@@ -85,7 +99,7 @@ export class TelegramBot {
   private async command(conversation: Conversation, command: string): Promise<void> {
     if (command === "start" || command === "help") {
       await this.api.sendMessage({ chat_id: conversation.chat_id, message_thread_id: conversation.thread_id || undefined,
-        text: "Personal GPT-6 conversations through OMP.\n/new — new conversation\n/stop — stop generation\n/status — session status\n/model — actual model\n/widget — Agent Control\n/reset — reset after confirmation\n/help — this help",
+        text: "Personal GPT-6 conversations through OMP.\n/stast — claim owner once if unassigned\n/new — new conversation\n/stop — stop generation\n/status — session status\n/model — actual model\n/widget — Agent Control\n/reset — reset after confirmation\n/help — this help",
         reply_markup: { inline_keyboard: [[{ text: "Personal status", callback_data: "status" }]] } });
     } else if (command === "model") {
       await this.say(conversation, this.modelLabel);
@@ -131,7 +145,7 @@ export class TelegramBot {
   private async callback(query: NonNullable<Update["callback_query"]>): Promise<void> {
     let text = "Action unavailable. Open the bot's private chat.";
     try {
-      if (authorized(this.config, query.from.id) && !query.from.is_bot && this.controlLimiter.allow(query.from.id) && query.message?.chat.type === "private") {
+      if (authorized(this.config, query.from.id, false, this.store.getOwnerId()) && !query.from.is_bot && this.controlLimiter.allow(query.from.id) && query.message?.chat.type === "private") {
         const conversation = this.store.getOrCreateConversation({ userId: query.from.id, chatId: query.message.chat.id, threadId: "message_thread_id" in query.message ? query.message.message_thread_id : undefined });
         if (query.data === "status") {
           const state = this.state(conversation);
@@ -156,7 +170,7 @@ export class TelegramBot {
     try {
       const binding = query.chat && query.message_id ? this.store.getWidget(query.chat.id, query.message_id) : null;
       const conversation = binding && this.store.getConversation(binding.conversation_id);
-      if (!binding || !conversation || !authorized(this.config, query.from.id) || query.from.is_bot || (query.data !== "stop" && !this.controlLimiter.allow(query.from.id))) throw new Error("Unauthorized");
+      if (!binding || !conversation || !authorized(this.config, query.from.id, false, this.store.getOwnerId()) || query.from.is_bot || (query.data !== "stop" && !this.controlLimiter.allow(query.from.id))) throw new Error("Unauthorized");
       const action = authorizeWidgetQuery(query, { chatId: Number(binding.chat_id), messageId: binding.message_id, telegramUserId: Number(conversation.telegram_user_id) });
       if (action === "new" && (this.stream.isActive(conversation.id) || !this.store.resetSessionReference(conversation.id))) {
         await this.api.answerWidgetQuery({ widget_query_id: query.id, data: JSON.stringify({ error: "Stop the active generation first." }) }); return;
@@ -205,7 +219,7 @@ export class TelegramBot {
     let deadline: ReturnType<typeof setTimeout> | undefined;
     let reserved = false;
     try {
-      if (!this.closing && user && !user.is_bot && authorized(this.config, user.id, true)) {
+      if (!this.closing && user && !user.is_bot && authorized(this.config, user.id, true, this.store.getOwnerId())) {
         if (!this.guestLimiter.allow(user.id) || this.guestCount + this.stream.activeCount() >= this.config.maxConcurrent) text = "The agent is busy or rate limited. Try again later.";
         else {
           reserved = true; this.guestCount++;

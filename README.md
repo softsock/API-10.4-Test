@@ -29,7 +29,7 @@ restrictions and [persistence](docs/persistence.md) for database invariants.
 ## Prerequisites and credentials
 
 1. Create a bot with [@BotFather](https://t.me/BotFather), retain its token privately,
-   and obtain your own numeric Telegram user ID from a trusted source.
+   and optionally obtain your own numeric Telegram user ID to reserve ownership.
 2. Enable **Guest Mode** in BotFather for this bot before testing guest invocations.
    BotFather configuration and eligible external-chat restrictions are independent
    of the application's `GUEST_ACCESS_MODE`. Leave the latter `disabled` initially;
@@ -61,6 +61,35 @@ remains unavailable until that probe, Telegram bot initialization, command setup
 and webhook registration/URL verification succeed. Catalog discovery alone does
 not establish successful model authentication.
 
+## One-time owner claim
+
+For the test-bot flow, leave `ADMIN_USER_ID` unset or blank. The first non-bot
+user to send **`/stast`** (this exact spelling) in the bot's **private chat** becomes
+its owner. Group messages, guest invocations and commands addressed to a different
+bot cannot claim ownership. The claim is atomic and stored in `/data/app.sqlite`;
+restarting, redeploying, `/new`, and `/reset` do not clear it. Later `/stast` calls
+cannot transfer ownership. Until there is an owner, generation and controls are
+denied even when private or guest access is configured as public.
+
+**First-claim risk:** any Telegram user can win while the bot is unclaimed. Do not
+announce its username or leave it unattended before claiming. For production,
+set `ADMIN_USER_ID` to your verified numeric user ID instead; it reserves ownership
+before updates are processed. A later `ADMIN_USER_ID` that conflicts with the
+stored owner stops startup rather than silently transferring control. An existing
+installation retaining its configured admin cannot be taken over with `/stast`.
+The command becomes available after normal model and webhook readiness; it does
+not bypass missing GPT-6 credentials or deploy the service.
+
+### Secret handling and rotation
+
+Never paste bot tokens into chat, GitHub, screenshots, or source files. If a token
+has been shared, use BotFather's revoke-token control to invalidate it and obtain
+a replacement. Store the replacement directly in Railway's `TELEGRAM_BOT_TOKEN`
+secret variable, then restart the service and verify webhook registration. Do not
+reuse the disclosed token for tests. Rotate `TELEGRAM_WEBHOOK_SECRET` in Railway
+and restart to register the new secret with `setWebhook`; retain the same durable
+volume and owner record. No production credentials belong in this repository.
+
 ## Development
 
 ```sh
@@ -76,7 +105,7 @@ storage paths must be absolute paths below `/data`, so local execution also need
 a writable `/data` and the stable `/app/agent-workdir`; prefer the Docker workflow
 rather than changing production paths to an ephemeral directory. For direct
 execution, have the machine administrator create those directories and grant the
-application user access. `ADMIN_USER_ID` is a positive integer and the webhook
+application user access. `ADMIN_USER_ID`, when set, is a positive integer; the webhook
 secret is 32–256 URL-safe characters. `TELEGRAM_WEBHOOK_URL` must be the exact
 public HTTPS `/telegram/webhook` URL without a query string.
 
@@ -116,7 +145,8 @@ After explicit approval for resources:
    configured service. Do not supply a URL path other than `/telegram/webhook`.
 4. Add `.env.example` variables in Railway Variables, with actual secrets supplied
    directly there: `TELEGRAM_BOT_TOKEN`, `TELEGRAM_WEBHOOK_SECRET`, and the selected
-   provider's authentication (for OpenAI, `OPENAI_API_KEY`). Set `ADMIN_USER_ID`,
+   provider's authentication (for OpenAI, `OPENAI_API_KEY`). Reserve the owner with
+   `ADMIN_USER_ID`, or leave it blank and immediately claim via `/stast`. Set
    `BOT_ACCESS_MODE=owner`, and `GUEST_ACCESS_MODE=disabled`. Retain the `/data`
    defaults. Leave model selectors unset for authenticated GPT-6 discovery or set
    the exact verified pair. Never paste credentials into GitHub, a PR, build args,
@@ -156,6 +186,7 @@ flush; verify it during the restart acceptance check before public use.
 
 | Command | Purpose |
 | --- | --- |
+| `/stast` | First private user claims an unassigned owner; no later reassignment |
 | `/start`, `/help` | Introduction and available commands |
 | `/new` | Detach the active transcript and start fresh; retained files are not erased |
 | `/stop` | Cancel this conversation's active turn |
@@ -230,3 +261,7 @@ multipart answer. Ask the user to send an explicit new request instead.
 CI runs frozen installation, strict typechecking, Bun tests, and a Docker image
 build. None of these proves model authentication, Telegram rendering, or Railway
 persistence; those require the real acceptance checks.
+
+## Contributors
+
+- [SheetHappiness](https://github.com/SheetHappiness) — credited as a commit co-author
