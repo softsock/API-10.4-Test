@@ -11,13 +11,14 @@ import { sendRenderedResponse } from "../src/rendering/rich-message.ts";
 // exercise real grammy routing and telegram transport with only the external model and network replaced
 function fixture() {
   const store = new Storage(":memory:");
-  const hooks: { beforeOpen?: () => Promise<void>; beforePrompt?: () => Promise<void>; abort?: () => void; output?: string; failWidgetAnswer?: boolean } = {};
+  const hooks: { beforeEdit?: () => Promise<void>; beforeOpen?: () => Promise<void>; beforePrompt?: () => Promise<void>; abort?: () => void; output?: string; failWidgetAnswer?: boolean } = {};
   const calls: Array<{ method: string; body: Record<string, any> }> = [];
   const prompts: Array<{ id: string; ephemeral: boolean; text: string }> = [];
   const config = readConfig({ TELEGRAM_BOT_TOKEN: "123:test", TELEGRAM_WEBHOOK_SECRET: "s".repeat(32), TELEGRAM_WEBHOOK_URL: "https://bot.example/telegram/webhook", ADMIN_USER_ID: "42", GUEST_ACCESS_MODE: "owner" });
   const api = new TelegramApi(config.token, { fetch: (async (url: string | URL | Request, options: RequestInit) => {
     const method = String(url).split("/").at(-1)!; const body = JSON.parse(String(options.body));
     calls.push({ method, body });
+    if (method === "editMessageWidgetData") await hooks.beforeEdit?.();
     if (method === "answerWidgetQuery" && hooks.failWidgetAnswer) return Response.json({ ok: false, error_code: 400, description: "Query expired" }, { status: 400 });
     return Response.json({ ok: true, result: method === "sendMessage" || method === "sendRichMessage" || method === "sendWidget"
       ? { message_id: 10, chat: { id: Number(body.chat_id ?? 42), type: "private" } } : true });
@@ -190,4 +191,20 @@ test("guest unicode output remains inside the transport limit and repeated widge
     expect(f.calls.filter(call => call.method === "sendWidget")).toHaveLength(1);
     expect(f.store.getWidgets(f.store.getOrCreateConversation({ userId: 42, chatId: 42 }).id)).toHaveLength(1);
   } finally { await f.close(); }
+});
+
+test("reused widget refreshes serialize with generation transitions and never share a revision", async () => {
+  const f = fixture(); const editing = gate(); let first = true;
+  f.hooks.beforeEdit = async () => { if (first) { first = false; await editing.promise; } };
+  try {
+    await f.dispatch(message(1, "/widget"));
+    await f.dispatch(message(2, "generate"));
+    const reused = f.dispatch(message(3, "/widget"));
+    await Bun.sleep(1); editing.resolve(); await reused;
+    const states = f.calls.filter(call => call.method === "editMessageWidgetData").map(call => JSON.parse(call.body.chat_data));
+    expect(states.length).toBeGreaterThanOrEqual(2);
+    expect(new Set(states.map(state => state.revision)).size).toBe(states.length);
+    expect(states.at(-1)!.status).toBe("completed");
+    expect(f.calls.filter(call => call.method === "sendWidget")).toHaveLength(1);
+  } finally { editing.resolve(); await f.close(); }
 });

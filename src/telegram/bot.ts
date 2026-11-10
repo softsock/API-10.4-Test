@@ -111,21 +111,16 @@ export class TelegramBot {
       if (this.widgetCreates.has(conversation.id)) { await this.say(conversation, "Agent Control is already being created."); return; }
       this.widgetCreates.add(conversation.id);
       try {
-        for (const existing of this.store.getWidgets(conversation.id)) {
-          try {
-            await this.api.editMessageWidgetData({ chat_id: Number(existing.chat_id), message_id: existing.message_id,
-              chat_data: encodeAgentControlState(this.state(conversation, existing.revision + 1)) });
-            this.store.advanceWidgetRevision(existing.chat_id, existing.message_id, existing.revision);
-            await this.say(conversation, "Your existing Agent Control widget has been refreshed.");
+        if (this.store.getWidgets(conversation.id).length) {
+          await this.refreshWidgets(conversation.id);
+          if (this.store.getWidgets(conversation.id).length) {
+            await this.say(conversation, "Your existing Agent Control widget is above. Refresh requested.");
             return;
-          } catch (error) {
-            if (error instanceof TelegramApiError && error.errorCode === 400 && /message.*not found|message.*invalid/i.test(error.message)) {
-              this.store.deleteWidget(existing.chat_id, existing.message_id);
-            } else throw error;
           }
         }
         const message = await this.api.sendWidget(createAgentControlWidget({ id: Number(conversation.chat_id), type: "private" }, this.state(conversation), conversation.thread_id || undefined));
         this.store.saveWidget(conversation.chat_id, message.message_id, conversation.id);
+        void this.refreshWidgets(conversation.id);
       } finally { this.widgetCreates.delete(conversation.id); }
     } else {
       await this.say(conversation, "Unknown command. Use /help.");
@@ -176,10 +171,10 @@ export class TelegramBot {
   }
 
   // coalesce lifecycle updates so older telegram edits cannot overwrite a newer widget state
-  refreshWidgets(conversationId: string): void {
-    if (this.closing) return;
+  refreshWidgets(conversationId: string): Promise<void> {
+    if (this.closing) return Promise.resolve();
     const existing = this.widgetRefreshes.get(conversationId);
-    if (existing) { existing.dirty = true; return; }
+    if (existing) { existing.dirty = true; return existing.promise; }
     const work = { dirty: true, promise: Promise.resolve() };
     this.widgetRefreshes.set(conversationId, work);
     work.promise = (async () => {
@@ -190,10 +185,15 @@ export class TelegramBot {
         for (const widget of this.store.getWidgets(conversationId)) {
           if (!this.store.advanceWidgetRevision(widget.chat_id, widget.message_id, widget.revision)) continue;
           await this.api.editMessageWidgetData({ chat_id: Number(widget.chat_id), message_id: widget.message_id,
-            chat_data: encodeAgentControlState(this.state(conversation, widget.revision + 1)) }).catch(() => {});
+            chat_data: encodeAgentControlState(this.state(conversation, widget.revision + 1)) }).catch(error => {
+              if (error instanceof TelegramApiError && error.errorCode === 400 && /message.*not found|message.*invalid/i.test(error.message)) {
+                this.store.deleteWidget(widget.chat_id, widget.message_id);
+              }
+            });
         }
       }
-    })().finally(() => { this.widgetRefreshes.delete(conversationId); });
+    })().catch(() => {}).finally(() => { this.widgetRefreshes.delete(conversationId); });
+    return work.promise;
   }
 
   // keep guest prompts ephemeral, concise and isolated from both private history and other participants

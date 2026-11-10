@@ -10,7 +10,7 @@ and a passing image build do not satisfy live acceptance.
 
 Integrated verification on **2026-11-10**, Bun **1.4.4**:
 
-- `bun test`: **68 passed, 0 failed, 314 assertions across 7 files**
+- `bun test`: **69 passed, 0 failed, 318 assertions across 7 files**
 - `bun run typecheck`: passed
 - `git diff --check`: passed
 - Real OMP SDK sessions, metadata/transcript restart restoration, isolated registries,
