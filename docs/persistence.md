@@ -112,5 +112,6 @@ backups, apply a retention policy, and do not claim immediate forensic erasure.
 
 The storage tests verify metadata restart behavior, migration idempotence,
 identity isolation, cross-connection uniqueness, update deduplication, widget
-ownership, and cancellation/finalization races. Real OMP transcript restoration
-and a production backup/restore rehearsal require integration verification.
+ownership, and cancellation/finalization races. Real OMP transcript restoration together with the SQLite mapping is covered by the
+SDK integration tests using simulated inference. A production backup/restore
+rehearsal still requires live verification.

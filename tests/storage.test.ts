@@ -300,3 +300,13 @@ test("terminal update payloads are purged while deduplication and outcome metada
   restarted.recoverInterrupted();
   expect(restarted.getUpdate(1)?.payload).toEqual({});
 });
+
+test("deadline-sensitive controls are claimed ahead of normal message backlog", () => {
+  const store = new Storage(":memory:");
+  try {
+    store.acceptUpdate(1, { update_id: 1, message: { text: "generate" } });
+    store.acceptUpdate(2, { update_id: 2, widget_query: { id: "widget" } });
+    store.acceptUpdate(3, { update_id: 3, message: { text: "/stop" } });
+    expect(store.getPendingUpdates().map(item => item.update_id)).toEqual([2, 3, 1]);
+  } finally { store.close(); }
+});

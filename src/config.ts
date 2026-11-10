@@ -11,6 +11,7 @@ export interface Config {
 
 // fail early rather than silently starting with incomplete credentials or ephemeral storage
 export function readConfig(env: Record<string, string | undefined> = process.env): Config {
+  // keep missing-secret diagnostics actionable without ever echoing their values
   const required = (key: string): string => {
     const value = env[key]?.trim();
     if (!value) throw new Error(`Required environment variable: ${key}`);

@@ -238,7 +238,10 @@ export class Storage {
   // expose only unclaimed updates so failed or ambiguous side effects are never replayed automatically
   getPendingUpdates(limit = 100): StoredUpdate[] {
     safeInteger(limit, 1);
-    const rows = this.db.query("SELECT * FROM processed_updates WHERE status = 'pending' ORDER BY update_id LIMIT ?")
+    const rows = this.db.query(`SELECT * FROM processed_updates WHERE status = 'pending' ORDER BY CASE WHEN
+      json_type(payload, '$.widget_query') IS NOT NULL OR json_type(payload, '$.callback_query') IS NOT NULL OR
+      json_type(payload, '$.stopped_message_generation') IS NOT NULL OR
+      json_extract(payload, '$.message.text') LIKE '/stop%' THEN 0 ELSE 1 END, update_id LIMIT ?`)
       .all(limit) as Array<Omit<StoredUpdate, "payload"> & { payload: string }>;
     return rows.map((row) => ({ ...row, payload: JSON.parse(row.payload) as unknown }));
   }
@@ -304,6 +307,11 @@ export class Storage {
   getWidgets(conversationId: string): WidgetMessage[] {
     return this.db.query("SELECT * FROM widget_messages WHERE conversation_id = ? ORDER BY chat_id, message_id")
       .all(conversationId) as WidgetMessage[];
+  }
+
+  // remove only a definitively missing widget so recreation cannot accumulate stale refresh targets
+  deleteWidget(chatId: TelegramId, messageId: number): void {
+    this.db.query("DELETE FROM widget_messages WHERE chat_id = ? AND message_id = ?").run(telegramId(chatId), messageId);
   }
 
   // reject stale widget mutations so concurrent controls cannot overwrite a newer state
