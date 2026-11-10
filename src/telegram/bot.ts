@@ -241,4 +241,3 @@ export class TelegramBot {
     await Promise.all([...this.widgetRefreshes.values()].map(item => item.promise));
   }
 }
-
